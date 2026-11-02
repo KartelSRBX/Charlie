@@ -1,0 +1,34 @@
+<clickhouse>
+    <!-- Generated from topology.yaml by `charlie render`. Do not edit. -->
+    <zookeeper>
+{% for k in t.keeper_nodes %}
+        <node>
+            <host>{{ k.name }}</host>
+            <port>9181</port>
+        </node>
+{% endfor %}
+        <session_timeout_ms>10000</session_timeout_ms>
+        <operation_timeout_ms>5000</operation_timeout_ms>
+    </zookeeper>
+
+    <remote_servers>
+        <{{ t.cluster }}>
+            <!-- Distributed queries run as the initiating user on every shard, authenticated
+                 by this shared secret instead of a stored password. -->
+            <secret from_env="CH_INTERSERVER_SECRET"/>
+{% for s in range(1, t.shards + 1) %}
+            <shard>
+                <!-- The replicated tables copy the data between replicas, so a write goes to
+                     one replica of the shard only. -->
+                <internal_replication>true</internal_replication>
+{% for n in t.shard_nodes(s) %}
+                <replica>
+                    <host>{{ n.name }}</host>
+                    <port>9000</port>
+                </replica>
+{% endfor %}
+            </shard>
+{% endfor %}
+        </{{ t.cluster }}>
+    </remote_servers>
+</clickhouse>

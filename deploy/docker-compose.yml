@@ -1,0 +1,178 @@
+# Generated from topology.yaml by `charlie render`. Do not edit.
+name: charlie
+
+x-clickhouse: &clickhouse
+  image: clickhouse/clickhouse-server:24.8
+  restart: unless-stopped
+  environment:
+    # Stock `default` user stays localhost-only; `admin` comes from config/users.xml.
+    CLICKHOUSE_SKIP_USER_SETUP: "1"
+    CH_ADMIN_PASSWORD: ${CH_ADMIN_PASSWORD:-charlie}
+    CH_INTERSERVER_SECRET: ${CH_INTERSERVER_SECRET:-charlie-interserver-secret}
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+    interval: 3s
+    timeout: 3s
+    retries: 40
+  depends_on:
+    keeper-1: { condition: service_healthy }
+    keeper-2: { condition: service_healthy }
+    keeper-3: { condition: service_healthy }
+
+x-keeper: &keeper
+  image: clickhouse/clickhouse-keeper:24.8
+  restart: unless-stopped
+  healthcheck:
+    # /dev/tcp is a bash feature, so this cannot be CMD-SHELL (dash).
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9181 && echo ruok >&3 && timeout 2 grep -q imok <&3"]
+    interval: 3s
+    timeout: 3s
+    retries: 40
+
+services:
+  keeper-1:
+    <<: *keeper
+    hostname: keeper-1
+    # Keeper refuses to start while a peer's name does not resolve, and Docker DNS only knows
+    # running containers, so wait for the peers here instead of crash-looping.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        for h in keeper-2 keeper-3; do
+          until getent hosts $$h >/dev/null; do sleep 1; done
+        done
+        exec /entrypoint.sh
+    ports:
+      - "9181:9181"
+    volumes:
+      - ./config/keeper-1/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+      - keeper-1-data:/var/lib/clickhouse
+
+  keeper-2:
+    <<: *keeper
+    hostname: keeper-2
+    # Keeper refuses to start while a peer's name does not resolve, and Docker DNS only knows
+    # running containers, so wait for the peers here instead of crash-looping.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        for h in keeper-1 keeper-3; do
+          until getent hosts $$h >/dev/null; do sleep 1; done
+        done
+        exec /entrypoint.sh
+    ports:
+      - "9182:9181"
+    volumes:
+      - ./config/keeper-2/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+      - keeper-2-data:/var/lib/clickhouse
+
+  keeper-3:
+    <<: *keeper
+    hostname: keeper-3
+    # Keeper refuses to start while a peer's name does not resolve, and Docker DNS only knows
+    # running containers, so wait for the peers here instead of crash-looping.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        for h in keeper-1 keeper-2; do
+          until getent hosts $$h >/dev/null; do sleep 1; done
+        done
+        exec /entrypoint.sh
+    ports:
+      - "9183:9181"
+    volumes:
+      - ./config/keeper-3/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+      - keeper-3-data:/var/lib/clickhouse
+
+  ch-s1-r1:
+    <<: *clickhouse
+    hostname: ch-s1-r1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./config/common.xml:/etc/clickhouse-server/config.d/10-common.xml:ro
+      - ./config/cluster.xml:/etc/clickhouse-server/config.d/20-cluster.xml:ro
+      - ./config/ch-s1-r1/macros.xml:/etc/clickhouse-server/config.d/30-macros.xml:ro
+      - ./config/users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro
+      - ch-s1-r1-data:/var/lib/clickhouse
+
+  ch-s1-r2:
+    <<: *clickhouse
+    hostname: ch-s1-r2
+    ports:
+      - "8124:8123"
+      - "9001:9000"
+    volumes:
+      - ./config/common.xml:/etc/clickhouse-server/config.d/10-common.xml:ro
+      - ./config/cluster.xml:/etc/clickhouse-server/config.d/20-cluster.xml:ro
+      - ./config/ch-s1-r2/macros.xml:/etc/clickhouse-server/config.d/30-macros.xml:ro
+      - ./config/users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro
+      - ch-s1-r2-data:/var/lib/clickhouse
+
+  ch-s2-r1:
+    <<: *clickhouse
+    hostname: ch-s2-r1
+    ports:
+      - "8125:8123"
+      - "9002:9000"
+    volumes:
+      - ./config/common.xml:/etc/clickhouse-server/config.d/10-common.xml:ro
+      - ./config/cluster.xml:/etc/clickhouse-server/config.d/20-cluster.xml:ro
+      - ./config/ch-s2-r1/macros.xml:/etc/clickhouse-server/config.d/30-macros.xml:ro
+      - ./config/users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro
+      - ch-s2-r1-data:/var/lib/clickhouse
+
+  ch-s2-r2:
+    <<: *clickhouse
+    hostname: ch-s2-r2
+    ports:
+      - "8126:8123"
+      - "9003:9000"
+    volumes:
+      - ./config/common.xml:/etc/clickhouse-server/config.d/10-common.xml:ro
+      - ./config/cluster.xml:/etc/clickhouse-server/config.d/20-cluster.xml:ro
+      - ./config/ch-s2-r2/macros.xml:/etc/clickhouse-server/config.d/30-macros.xml:ro
+      - ./config/users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro
+      - ch-s2-r2-data:/var/lib/clickhouse
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # An on-prem Grafana should not phone home (and the UI stalls where egress is blocked).
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/cluster.json
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  keeper-1-data:
+  keeper-2-data:
+  keeper-3-data:
+  ch-s1-r1-data:
+  ch-s1-r2-data:
+  ch-s2-r1-data:
+  ch-s2-r2-data:

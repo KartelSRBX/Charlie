@@ -1,0 +1,23 @@
+# The single source of truth for the cluster shape.
+# `charlie render` turns this file into everything under deploy/ (compose file, ClickHouse and
+# Keeper configs, Prometheus scrape config). CI fails if deploy/ drifts from this file.
+cluster: charlie
+
+images:
+  server: clickhouse/clickhouse-server:24.8
+  keeper: clickhouse/clickhouse-keeper:24.8
+
+# Raft quorum for replication metadata. Must be odd: 3 tolerates one failure, 5 tolerates two.
+keepers: 3
+
+# Shards split the data, replicas copy it. 2 x 2 survives the loss of any one replica per shard.
+shards: 2
+replicas: 2
+
+# Host ports published for convenience; nodes talk to each other on the compose network.
+ports:
+  http_base: 8123      # ch-s1-r1 -> 8123, ch-s1-r2 -> 8124, ch-s2-r1 -> 8125, ...
+  native_base: 9000
+  keeper_base: 9181    # keeper-1 -> 9181 (four-letter-word commands for `charlie status`)
+  prometheus: 9090
+  grafana: 3000

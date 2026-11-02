@@ -1,0 +1,8 @@
+<clickhouse>
+    <!-- Generated from topology.yaml by `charlie render`. Do not edit. -->
+    <macros>
+        <cluster>charlie</cluster>
+        <shard>2</shard>
+        <replica>ch-s2-r2</replica>
+    </macros>
+</clickhouse>
