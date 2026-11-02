@@ -59,10 +59,15 @@ jobs:
           echo "targets up: $up"
           test "$up" = 7
       - name: Failure drills (replica, Keeper, quorum loss, whole shard, rolling restart)
-        run: pytest -m e2e tests/e2e -v
-      - name: Logs on failure
+        shell: bash
+        run: pytest -m e2e tests/e2e -v --tb=short -rA 2>&1 | tee e2e.log
+      - name: Failure report
         if: failure()
-        run: docker compose -f deploy/docker-compose.yml logs --tail 150
+        run: |
+          echo "=== pytest summary ==="
+          grep -E "^(FAILED|ERROR|PASSED)|^E  |Error|assert" e2e.log | head -60 || true
+          echo "=== cluster logs (tail) ==="
+          docker compose -f deploy/docker-compose.yml logs --tail 30
       - name: Tear down
         if: always()
         run: docker compose -f deploy/docker-compose.yml down -v
