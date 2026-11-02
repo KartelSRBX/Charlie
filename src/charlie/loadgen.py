@@ -66,10 +66,14 @@ class Stats:
 class LoadGenerator:
     """Inserts batches into ``igaming.bets`` through any live node, failing over on errors."""
 
-    def __init__(self, topo: Topology, batch_size: int = 5000, attempts: int = 6, start: int = 0):
+    def __init__(
+        self, topo: Topology, batch_size: int = 5000, retry_for: float = 60.0, start: int = 0
+    ):
         self.topo = topo
         self.batch_size = batch_size
-        self.attempts = attempts
+        # A real client retries for a bounded time, not a fixed number of tries: how long a
+        # node takes to come back varies, the patience of a caller does not.
+        self.retry_for = retry_for
         self.stats = Stats()
         self._lock = threading.Lock()
         self.start = start
@@ -95,12 +99,19 @@ class LoadGenerator:
         ts = self._ts0 + timedelta(seconds=index)
         rows = make_batch(index, self.batch_size, ts)
         eps = ch.endpoints(self.topo)
-        for attempt in range(self.attempts):
+        give_up = time.monotonic() + self.retry_for
+        attempt = -1
+        while True:
+            attempt += 1
             ep = eps[(index + attempt) % len(eps)]
             try:
                 self._client(ep.port).insert("igaming.bets", rows, column_names=COLUMNS)
             except Exception:
                 self._clients.pop(ep.port, None)
+                if time.monotonic() >= give_up:
+                    with self._lock:
+                        self.stats.failed_batches.append(index)
+                    return False
                 with self._lock:
                     self.stats.retries += 1
                 time.sleep(min(0.2 * 2**attempt, 2.0))
@@ -109,17 +120,20 @@ class LoadGenerator:
                 self.stats.batches_ok += 1
                 self.stats.rows_ok += len(rows)
             return True
-        with self._lock:
-            self.stats.failed_batches.append(index)
-        return False
 
-    def run(self, batches: int | None = None, duration: float | None = None, workers: int = 4):
-        """Send ``batches`` batches or run for ``duration`` seconds, whichever comes first."""
+    def run(
+        self,
+        batches: int | None = None,
+        duration: float | None = None,
+        workers: int = 4,
+        until: threading.Event | None = None,
+    ):
+        """Send ``batches`` batches, run for ``duration`` seconds, or until ``until`` is set."""
         deadline = time.monotonic() + duration if duration else None
 
         def worker() -> None:
             while True:
-                if deadline and time.monotonic() >= deadline:
+                if (deadline and time.monotonic() >= deadline) or (until and until.is_set()):
                     return
                 i = self.next_index()
                 if batches is not None and i >= self.start + batches:

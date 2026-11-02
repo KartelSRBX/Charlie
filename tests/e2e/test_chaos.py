@@ -90,7 +90,7 @@ def test_keeper_quorum_lost_reads_survive_writes_stop_and_recover(
     )
 
     # Writes are refused, and no half-written batch is acknowledged.
-    gen = make_gen(attempts=2)
+    gen = make_gen(retry_for=3)
     gen.run(batches=3, workers=1)
     assert len(gen.stats.failed_batches) == 3
     assert gen.stats.rows_ok == 0
@@ -130,8 +130,9 @@ def test_whole_shard_down_fails_loudly_unless_told_to_skip(topo, make_gen, table
 
 def test_rolling_restart_under_load_loses_nothing(topo, make_gen, table_rows, healthy):
     before = table_rows()
-    gen = make_gen(attempts=8)
-    t = threading.Thread(target=lambda: gen.run(duration=100, workers=4))
+    gen = make_gen(retry_for=90)
+    stop = threading.Event()
+    t = threading.Thread(target=lambda: gen.run(workers=4, until=stop))
     t.start()
     try:
         for node in topo.nodes:  # one at a time; the other replica of the shard serves meanwhile
@@ -148,6 +149,7 @@ def test_rolling_restart_under_load_loses_nothing(topo, make_gen, table_rows, he
                 what=f"{node.name} to drain its replication queue",
             )
     finally:
+        stop.set()
         t.join()
     assert not gen.stats.failed_batches
     assert gen.stats.rows_ok > 0

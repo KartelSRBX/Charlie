@@ -33,7 +33,7 @@ def main() -> int:
     client = ch.first_alive(topo)
     before = int(client.command("SELECT count() FROM igaming.bets"))
     top = int(client.command("SELECT coalesce(max(bet_id) + 1, 0) FROM igaming.bets"))
-    gen = LoadGenerator(topo, batch_size=2000, attempts=8, start=-(-top // 2000))
+    gen = LoadGenerator(topo, batch_size=2000, retry_for=90, start=-(-top // 2000))
 
     t = threading.Thread(target=lambda: gen.run(duration=130, workers=3))
     t.start()
