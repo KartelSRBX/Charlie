@@ -4,6 +4,9 @@ name: charlie
 x-clickhouse: &clickhouse
   image: clickhouse/clickhouse-server:24.8
   restart: unless-stopped
+  # A loaded server needs more than Docker's default 10 s to shut down cleanly; killing it
+  # mid-shutdown forces a part re-check on the next start.
+  stop_grace_period: 60s
   environment:
     # Stock `default` user stays localhost-only; `admin` comes from config/users.xml.
     CLICKHOUSE_SKIP_USER_SETUP: "1"

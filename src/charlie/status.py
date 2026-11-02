@@ -93,6 +93,20 @@ def check_consistency(
 ) -> Consistency:
     """Total and unique row counts, replica equality inside each shard, shard balance."""
     problems = []
+
+    # First let every replica finish pulling what its shard has committed. Counting before this
+    # races with replication: a Distributed query may read a replica that has not fetched the
+    # last parts yet (a restarted replica reports an empty queue before it has read the log),
+    # and the total comes out short although every row is stored.
+    per_node: dict[str, int] = {}
+    for n in topo.nodes:
+        try:
+            nc = ch.connect(n.http_port, timeout=120)
+            nc.command("SYSTEM SYNC REPLICA igaming.bets_local")
+            per_node[n.name] = int(nc.command("SELECT count() FROM igaming.bets_local"))
+        except Exception as e:
+            problems.append(f"{n.name} unreachable: {type(e).__name__}")
+
     c = ch.first_alive(topo)
     c.command("SYSTEM FLUSH DISTRIBUTED igaming.bets")
     total, unique = (
@@ -104,15 +118,6 @@ def check_consistency(
     if unique != total:
         problems.append(f"{total - unique} duplicate bet_id rows")
 
-    per_node: dict[str, int] = {}
-    for n in topo.nodes:
-        try:
-            nc = ch.connect(n.http_port, timeout=10)
-            # Make sure a replica that was just revived has caught up before counting.
-            nc.command("SYSTEM SYNC REPLICA igaming.bets_local")
-            per_node[n.name] = int(nc.command("SELECT count() FROM igaming.bets_local"))
-        except Exception as e:
-            problems.append(f"{n.name} unreachable: {type(e).__name__}")
     shard_totals = []
     for s in range(1, topo.shards + 1):
         counts = {x.name: per_node[x.name] for x in topo.shard_nodes(s) if x.name in per_node}

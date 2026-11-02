@@ -136,6 +136,13 @@ none duplicated, replicas identical to the row.
   the sibling fetches it afterwards. If that replica's disk is destroyed in the gap, those rows
   are gone. `insert_quorum = 2` closes the gap and makes the shard refuse writes while a replica
   is down. This repo keeps the default and says so, rather than hiding the choice.
+- **Reads can be briefly stale.** A query through the Distributed table reads one replica per
+  shard, and a replica that has just restarted may not have fetched the newest parts yet
+  (`max_replica_delay_for_distributed_queries` decides when ClickHouse avoids a lagging one).
+  The consistency check therefore runs `SYSTEM SYNC REPLICA` on every node before it counts;
+  an earlier version of the rolling-restart drill failed in CI for exactly this reason, with
+  all rows stored and the total read from a lagging replica. For read-your-writes use
+  `insert_quorum` together with `select_sequential_consistency = 1`.
 - **Synchronous Distributed inserts** (`insert_distributed_sync = 1`) in the load generator, so an
   HTTP 200 means the rows reached the shards. The default asynchronous mode acknowledges once the
   rows are on the receiving node's disk, which is faster but weaker.
@@ -144,6 +151,8 @@ none duplicated, replicas identical to the row.
 - **Keeper waits for its peers' DNS names** in the compose entrypoint. Keeper refuses to start
   while a peer name does not resolve and Docker DNS only knows running containers, so without
   this the three crash-loop at first boot.
+- **Servers get 60 s to stop** (`stop_grace_period`) instead of Docker's default 10 s, so a
+  loaded node finishes a clean shutdown during a rolling restart rather than being killed.
 - **IPv6 is off for Raft** (`enable_ipv6 = false`) so Keeper starts on IPv4-only hosts.
 - **Grafana does not phone home**, which also keeps its UI from stalling where egress is blocked.
 - Default credentials (`admin` / `charlie`) are for the local demo. They are read from
