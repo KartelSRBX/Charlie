@@ -146,6 +146,21 @@ def cmd_upgrade(args, topo) -> int:
     return 0 if rep.ok else 1
 
 
+def cmd_bench(args, topo) -> int:
+    from . import bench
+
+    res = bench.run(
+        topo, rows=args.rows, seconds=2 if args.quick else args.seconds, runs=3 if args.quick else 7
+    )
+    text = bench.markdown(res)
+    if args.out:
+        Path(args.out).write_text(text)
+        print(f"wrote {args.out}")
+    else:
+        print(text)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="charlie", description=__doc__)
     p.add_argument("--topology", default=str(ROOT / "topology.yaml"))
@@ -183,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     u = sub.add_parser("upgrade", help="rolling upgrade to the images in topology.yaml")
     u.add_argument("--no-load", action="store_true", help="do not write and read during it")
     u.set_defaults(fn=cmd_upgrade)
+
+    bn = sub.add_parser("bench", help="ingest and query benchmarks in a scratch database")
+    bn.add_argument("--rows", type=int, default=10_000_000, help="rows for the query phase")
+    bn.add_argument("--seconds", type=float, default=15, help="per ingest case")
+    bn.add_argument("--quick", action="store_true", help="a smoke run (CI): tiny and fast")
+    bn.add_argument("--out", help="write the markdown report here")
+    bn.set_defaults(fn=cmd_bench)
 
     access_cli.register(sub)
     access_cli.register_directory(sub)
