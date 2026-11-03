@@ -1,0 +1,107 @@
+# Generated from topology.yaml by `charlie render`. Do not edit.
+name: {{ t.cluster }}
+
+x-clickhouse: &clickhouse
+  image: {{ t.images.server }}
+  restart: unless-stopped
+  # A loaded server needs more than Docker's default 10 s to shut down cleanly; killing it
+  # mid-shutdown forces a part re-check on the next start.
+  stop_grace_period: 60s
+  environment:
+    # Stock `default` user stays localhost-only; `admin` comes from config/users.xml.
+    CLICKHOUSE_SKIP_USER_SETUP: "1"
+    CH_ADMIN_PASSWORD: ${CH_ADMIN_PASSWORD:-charlie}
+    CH_INTERSERVER_SECRET: ${CH_INTERSERVER_SECRET:-charlie-interserver-secret}
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+    interval: 3s
+    timeout: 3s
+    retries: 40
+  depends_on:
+{% for k in t.keeper_nodes %}
+    {{ k.name }}: { condition: service_healthy }
+{% endfor %}
+
+x-keeper: &keeper
+  image: {{ t.images.keeper }}
+  restart: unless-stopped
+  healthcheck:
+    # /dev/tcp is a bash feature, so this cannot be CMD-SHELL (dash).
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9181 && echo ruok >&3 && timeout 2 grep -q imok <&3"]
+    interval: 3s
+    timeout: 3s
+    retries: 40
+
+services:
+{% for k in t.keeper_nodes %}
+  {{ k.name }}:
+    <<: *keeper
+    hostname: {{ k.name }}
+    # Keeper refuses to start while a peer's name does not resolve, and Docker DNS only knows
+    # running containers, so wait for the peers here instead of crash-looping.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        for h in{% for p in t.keeper_nodes if p.id != k.id %} {{ p.name }}{% endfor %}; do
+          until getent hosts $$h >/dev/null; do sleep 1; done
+        done
+        exec /entrypoint.sh
+    ports:
+      - "{{ k.client_port }}:9181"
+    volumes:
+      - ./config/{{ k.name }}/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+      - {{ k.volume }}:/var/lib/clickhouse
+
+{% endfor %}
+{% for n in t.nodes %}
+  {{ n.name }}:
+    <<: *clickhouse
+    hostname: {{ n.name }}
+    ports:
+      - "{{ n.http_port }}:8123"
+      - "{{ n.native_port }}:9000"
+    volumes:
+      - ./config/common.xml:/etc/clickhouse-server/config.d/10-common.xml:ro
+      - ./config/cluster.xml:/etc/clickhouse-server/config.d/20-cluster.xml:ro
+      - ./config/{{ n.name }}/macros.xml:/etc/clickhouse-server/config.d/30-macros.xml:ro
+      - ./config/users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro
+      - {{ n.volume }}:/var/lib/clickhouse
+
+{% endfor %}
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    ports:
+      - "{{ t.ports.prometheus }}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    ports:
+      - "{{ t.ports.grafana }}:3000"
+    environment:
+      # An on-prem Grafana should not phone home (and the UI stalls where egress is blocked).
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/cluster.json
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+{% for k in t.keeper_nodes %}
+  {{ k.volume }}:
+{% endfor %}
+{% for n in t.nodes %}
+  {{ n.volume }}:
+{% endfor %}

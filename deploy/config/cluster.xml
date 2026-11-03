@@ -1,0 +1,53 @@
+<clickhouse>
+    <!-- Generated from topology.yaml by `charlie render`. Do not edit. -->
+    <zookeeper>
+        <node>
+            <host>keeper-1</host>
+            <port>9181</port>
+        </node>
+        <node>
+            <host>keeper-2</host>
+            <port>9181</port>
+        </node>
+        <node>
+            <host>keeper-3</host>
+            <port>9181</port>
+        </node>
+        <session_timeout_ms>10000</session_timeout_ms>
+        <operation_timeout_ms>5000</operation_timeout_ms>
+    </zookeeper>
+
+    <remote_servers>
+        <charlie>
+            <!-- Distributed queries run as the initiating user on every shard, authenticated
+                 by this shared secret instead of a stored password. -->
+            <secret from_env="CH_INTERSERVER_SECRET"/>
+            <shard>
+                <!-- The replicated tables copy the data between replicas, so a write goes to
+                     one replica of the shard only. -->
+                <internal_replication>true</internal_replication>
+                <replica>
+                    <host>ch-s1-r1</host>
+                    <port>9000</port>
+                </replica>
+                <replica>
+                    <host>ch-s1-r2</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+            <shard>
+                <!-- The replicated tables copy the data between replicas, so a write goes to
+                     one replica of the shard only. -->
+                <internal_replication>true</internal_replication>
+                <replica>
+                    <host>ch-s2-r1</host>
+                    <port>9000</port>
+                </replica>
+                <replica>
+                    <host>ch-s2-r2</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </charlie>
+    </remote_servers>
+</clickhouse>

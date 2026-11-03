@@ -1,0 +1,18 @@
+# Generated from topology.yaml by `charlie render`. Do not edit.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: clickhouse
+    static_configs:
+{% for n in t.nodes %}
+      - targets: ["{{ n.name }}:9363"]
+        labels: { node: "{{ n.name }}", shard: "{{ n.shard }}", replica: "{{ n.replica }}" }
+{% endfor %}
+  - job_name: keeper
+    static_configs:
+{% for k in t.keeper_nodes %}
+      - targets: ["{{ k.name }}:9363"]
+        labels: { node: "{{ k.name }}" }
+{% endfor %}

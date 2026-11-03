@@ -1,0 +1,24 @@
+# Generated from topology.yaml by `charlie render`. Do not edit.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: clickhouse
+    static_configs:
+      - targets: ["ch-s1-r1:9363"]
+        labels: { node: "ch-s1-r1", shard: "1", replica: "1" }
+      - targets: ["ch-s1-r2:9363"]
+        labels: { node: "ch-s1-r2", shard: "1", replica: "2" }
+      - targets: ["ch-s2-r1:9363"]
+        labels: { node: "ch-s2-r1", shard: "2", replica: "1" }
+      - targets: ["ch-s2-r2:9363"]
+        labels: { node: "ch-s2-r2", shard: "2", replica: "2" }
+  - job_name: keeper
+    static_configs:
+      - targets: ["keeper-1:9363"]
+        labels: { node: "keeper-1" }
+      - targets: ["keeper-2:9363"]
+        labels: { node: "keeper-2" }
+      - targets: ["keeper-3:9363"]
+        labels: { node: "keeper-3" }

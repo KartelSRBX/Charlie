@@ -1,0 +1,40 @@
+<clickhouse>
+    <!-- Settings shared by every ClickHouse server in the cluster. -->
+    <logger>
+        <level>information</level>
+        <console>1</console>
+    </logger>
+
+    <listen_host>0.0.0.0</listen_host>
+
+    <!-- Server metrics for Prometheus. -->
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>9363</port>
+        <metrics>true</metrics>
+        <events>true</events>
+        <asynchronous_metrics>true</asynchronous_metrics>
+        <errors>true</errors>
+    </prometheus>
+
+    <!-- ON CLUSTER DDL goes through this queue in Keeper. -->
+    <distributed_ddl>
+        <path>/clickhouse/task_queue/ddl</path>
+    </distributed_ddl>
+
+    <merge_tree>
+        <!-- Remember more insert block hashes, so a client retry after a timeout is deduplicated. -->
+        <replicated_deduplication_window>1000</replicated_deduplication_window>
+    </merge_tree>
+
+    <!-- Keep the system log tables from eating the disk of a long-lived demo. -->
+    <query_log>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </query_log>
+    <part_log>
+        <ttl>event_date + INTERVAL 3 DAY</ttl>
+    </part_log>
+    <metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+</clickhouse>

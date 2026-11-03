@@ -1,0 +1,15 @@
+<clickhouse>
+    <!-- Bootstrap admin, defined in config so that it exists before any SQL has run.
+         Everything else is managed as SQL (see the access-as-code stage). -->
+    <users>
+        <admin>
+            <password from_env="CH_ADMIN_PASSWORD"/>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </admin>
+    </users>
+</clickhouse>
