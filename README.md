@@ -24,6 +24,7 @@ each acknowledged row exists exactly once and that all replicas hold identical d
 | Inter-node trust | Distributed queries run as the calling user over a shared `secret`, so no passwords are stored in the cluster definition. Secrets come from the environment (`from_env`) and are never rendered into files |
 | Observability | Every server and Keeper exposes Prometheus metrics; one dashboard answers "is the cluster healthy?" in six numbers |
 | Failure drills | Six scripted drills run in CI against the real containers (below) |
+| Backups | `charlie backup create / list / restore / drill`: full and incremental `BACKUP ... ON CLUSTER` to S3-compatible storage, credentials only in server config. The drill drops every database, restores, and compares row counts and content hashes ([Backups and restore](#backups-and-restore)) |
 | Access as code | One reviewed `access/model.yaml` becomes roles, grants, row policies, quotas and settings profiles in **ClickHouse and PostgreSQL**. `charlie access plan / apply / drift`; people come from LDAP groups, and leaving a group removes access in both databases ([Access as code](#access-as-code)) |
 
 ## Architecture
@@ -65,7 +66,8 @@ Requirements: Docker with Compose v2, about 4 GB RAM free, Python 3.11+.
 
 ```bash
 make dev && . .venv/bin/activate   # the `charlie` command
-make up       # 3 Keepers, 4 ClickHouse servers, PostgreSQL, LDAP, Prometheus, Grafana; applies the schema
+make up       # 3 Keepers, 4 ClickHouse servers, PostgreSQL, LDAP, MinIO, Prometheus, Grafana; applies the schema
+make backup   # full backup of every database to MinIO; `make backup-drill` destroys and restores
 make access   # seed the demo directory and apply access/model.yaml to both databases
 make load     # 100k rows through the Distributed table
 make status   # keeper roles, replica health, rows per replica
@@ -226,6 +228,60 @@ Try it: `make up access`, then `charlie directory show`, `charlie access drift`,
 `bob` / `bob-pass` on `localhost:8123` (ClickHouse) or `localhost:5432/app` (PostgreSQL). The demo
 people are in `fixtures/directory/people.yaml`; their passwords are demo-only.
 
+## Backups and restore
+
+A backup nobody has restored is a hope, so the interesting part is the drill, not the `BACKUP`
+statement. `charlie backup drill` (also run by CI) does this against the live cluster:
+
+1. load rows, record a fingerprint (row count and a hash over every column, per database), take a
+   **full** backup to the object store;
+2. load more rows, take an **incremental** backup on top of the full one;
+3. `DROP DATABASE ... SYNC` for every database, which also removes their metadata from Keeper;
+4. `RESTORE` the incremental backup, `SYSTEM SYNC REPLICA` everywhere, and assert that the
+   fingerprint, replica equality and the absence of duplicates match the moment of the backup;
+5. destroy again and restore the **full** backup, to show that an older point in time comes back
+   as exactly the older data.
+
+```text
+$ charlie backup drill --rows 1000000
+loading 1000000 rows
+full backup full-20261103-094342: 1.4s, 36,344,557 bytes
+loading 500000 more rows
+incremental backup incr-20261103-094342: 0.9s, 19,572,037 bytes
+destroying the databases, restoring incr-20261103-094342
+  restored in 1.2s: bets=2500000 hash=e08974c2f832c8c9 ledger=25000 hash=d523b7929eb82767 migrations=2
+destroying the databases, restoring full-20261103-094342
+  restored in 1.0s: bets=2000000 hash=f113d079962ec85b ledger=20000 hash=9eb6d698f643e08c migrations=2
+restore drill: OK
+```
+
+What the numbers say, and what they do not:
+
+- **The bucket holds each row once, not once per replica.** With `ON CLUSTER`, one replica per
+  shard writes its parts. For 1M rows the cluster holds 36.1 MB across four replicas; the backup
+  is 18.2 MB, 1.01x one copy. Parts are copied as they are on disk, already compressed.
+- **Increments are per part, not per row.** A backup of an unchanged cluster is 106 KB of
+  metadata, and 50k new rows cost about 3 MB. But when a background merge has combined old and new
+  parts into a new part, that part is uploaded again, which is why 500k new rows above cost
+  19.6 MB (a full copy is 36 MB), not a proportional 9 MB.
+- **The times are for a laptop and a MinIO container on the same Docker network.** A restore in
+  about a second says the mechanism works, not that a terabyte restores in a second. Plan
+  recovery time from the bandwidth to the bucket, not from this table.
+- **The `BACKUP` statement carries no credentials.** The bucket's keys are in the server config
+  (`<s3>`, matched by URL prefix, read from the environment), so nothing sensitive reaches
+  `query_log`; a test greps for it.
+- **Access control is not in the backup on purpose.** Users, roles and policies are rebuilt by
+  `charlie access apply` from the reviewed model and the directory. The drill asserts that
+  `charlie access drift` is clean after the restore, including the row policies on the tables
+  that were dropped and re-created.
+- **The restore target must not contain the databases.** `RESTORE` refuses to overwrite, which
+  is the safe default. The schema-migration history (`charlie_meta`) is part of the backup, so a
+  restored cluster knows which migrations ran and `charlie migrate --plan` says nothing is pending.
+
+`make up` starts MinIO (console on http://localhost:9101, `charlie` / `charlie-secret`);
+`make backup` takes a backup, `make backup-drill` runs the drill. Point `topology.yaml`'s
+`minio` block at real S3 for anything else.
+
 ## Design notes and trade-offs
 
 - **An insert is acknowledged after one replica has it.** The default is availability: with
@@ -266,6 +322,7 @@ templates/                 Jinja templates for compose, Keeper, macros, remote_s
 config/                    static server settings and the bootstrap admin
 deploy/                    GENERATED. CI fails if it differs from the topology
 schema/migrations/         ordered, checksummed, ON CLUSTER SQL
+src/charlie/backup.py      backup / restore / restore drill
 access/model.yaml          roles, scoped roles, profiles, quotas, service accounts
 src/charlie/access/        model -> facts -> diff -> SQL for ClickHouse and PostgreSQL; LDAP seeding
 fixtures/                  demo PostgreSQL data and demo LDAP people
@@ -285,9 +342,9 @@ make dashboards   # rebuild grafana/dashboards/*.json from grafana/build_dashboa
 make check        # deploy/ must match topology.yaml
 ```
 
-Unit tests need no Docker (78 of them: topology validation, rendered XML, migration logic,
+Unit tests need no Docker (82 of them: topology validation, rendered XML, migration logic,
 deterministic batches, the access model and its diff). CI runs them, then starts the cluster and runs every drill.
 
 ## Next
 
-Backups to object storage with restore drills, rolling upgrades, and benchmarks with numbers.
+Rolling upgrades under load, and benchmarks with numbers.

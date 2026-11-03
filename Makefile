@@ -20,6 +20,7 @@ up: ## Start Keepers and ClickHouse nodes, Prometheus and Grafana, then apply th
 	$(CHARLIE) migrate
 	@echo "Grafana:    http://localhost:3000   (Charlie / Cluster health)"
 	@echo "Prometheus: http://localhost:9090"
+	@echo "MinIO:      http://localhost:9101  (charlie / charlie-secret), S3 API on :9100"
 	@echo "ClickHouse: http://localhost:8123/play  (admin / charlie, one port per node: 8123-8126)"
 
 down: ## Stop the cluster, keep data
@@ -27,6 +28,12 @@ down: ## Stop the cluster, keep data
 
 clean: ## Stop the cluster and delete all data
 	$(COMPOSE) down -v
+
+backup: ## Full backup of every database to the object store
+	$(CHARLIE) backup create
+
+backup-drill: ## Back up, DROP every database, restore, compare (destructive)
+	$(CHARLIE) backup drill
 
 access-plan: ## Show how ClickHouse and PostgreSQL differ from access/model.yaml
 	$(CHARLIE) access plan

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from . import ch, migrate, render, status
@@ -101,6 +102,33 @@ def cmd_verify(args, topo) -> int:
     return 0 if res.ok else 1
 
 
+def cmd_backup(args, topo) -> int:
+    from . import backup
+
+    c = backup.admin(topo)
+    if args.backup_cmd == "create":
+        name = args.name or time.strftime(
+            "%s-%%Y%%m%%d-%%H%%M%%S" % ("incr" if args.base else "full")
+        )
+        r = backup.create(c, topo, name, base=args.base)
+        print(
+            f"{r.name}: {r.stored_bytes:,} bytes in {r.files} files, {r.seconds:.1f}s"
+            + (f" (increment on {r.base})" if r.base else "")
+        )
+    elif args.backup_cmd == "list":
+        for name, size, files in backup.list_backups(c, topo):
+            print(f"{name:<24} {size:>14,} bytes  {files:>4} files")
+    elif args.backup_cmd == "restore":
+        print(f"restored {args.name} in {backup.restore(c, topo, args.name):.1f}s")
+    elif args.backup_cmd == "drill":
+        rep = backup.drill(topo, rows=args.rows)
+        for p in rep.problems:
+            print(f"PROBLEM: {p}")
+        print("restore drill:", "OK" if rep.ok else "FAILED")
+        return 0 if rep.ok else 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="charlie", description=__doc__)
     p.add_argument("--topology", default=str(ROOT / "topology.yaml"))
@@ -122,6 +150,18 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("verify", help="check totals, duplicates, replica equality, shard balance")
     v.add_argument("--expect", type=int, default=None, help="exact number of rows expected")
     v.set_defaults(fn=cmd_verify)
+
+    b = sub.add_parser("backup", help="backups to object storage and the restore drill")
+    bsub = b.add_subparsers(dest="backup_cmd", required=True)
+    bc = bsub.add_parser("create", help="back up all databases (full, or an increment with --base)")
+    bc.add_argument("--name")
+    bc.add_argument("--base", help="name of the backup this one builds on")
+    bsub.add_parser("list", help="backups in the bucket")
+    br = bsub.add_parser("restore", help="restore a backup into a cluster that lacks the databases")
+    br.add_argument("name")
+    bd = bsub.add_parser("drill", help="back up, destroy, restore, compare (destructive!)")
+    bd.add_argument("--rows", type=int, default=200_000)
+    b.set_defaults(fn=cmd_backup)
 
     access_cli.register(sub)
     access_cli.register_directory(sub)

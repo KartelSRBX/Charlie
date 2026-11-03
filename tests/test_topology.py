@@ -55,3 +55,9 @@ def test_host_port_collision_is_rejected():
 def test_cluster_name_must_be_a_safe_identifier():
     with pytest.raises(ValidationError):
         make(cluster="my cluster")
+
+
+def test_minio_ports_may_not_clash_with_clickhouse_ports():
+    with pytest.raises(ValidationError, match="host ports collide"):
+        make(minio={"port": 8123})
+    assert make(minio={"port": 9100}).minio.bucket == "backups"

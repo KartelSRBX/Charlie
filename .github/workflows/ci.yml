@@ -68,7 +68,7 @@ jobs:
           up=$(curl -s 'localhost:9090/api/v1/query?query=count(up==1)' | python -c "import json,sys; print(json.load(sys.stdin)['data']['result'][0]['value'][1])")
           echo "targets up: $up"
           test "$up" = 7
-      - name: Access tests and failure drills (replica, Keeper, quorum loss, whole shard, rolling restart)
+      - name: Access tests, backup drill and failure drills (replica, Keeper, quorum loss, whole shard, rolling restart)
         shell: bash
         env:
           SVC_LOADER_PASSWORD: loader-pass

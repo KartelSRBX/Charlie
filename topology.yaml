@@ -33,3 +33,10 @@ ldap:
   image: osixia/openldap:1.5.0
   port: 3890
   domain: charlie.local
+
+# Object storage for backups (`charlie backup ...`). Any S3 endpoint works; MinIO stands in for it.
+minio:
+  image: bitnamilegacy/minio:2025.4.22-debian-12-r1
+  port: 9100
+  console_port: 9101
+  bucket: backups

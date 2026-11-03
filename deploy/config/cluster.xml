@@ -17,6 +17,16 @@
         <operation_timeout_ms>5000</operation_timeout_ms>
     </zookeeper>
 
+    <!-- Credentials for the backup bucket live in the server config, matched by URL prefix, so a
+         BACKUP statement carries no secret and none ends up in query_log. -->
+    <s3>
+        <backups>
+            <endpoint>http://minio:9000/backups/</endpoint>
+            <access_key_id from_env="S3_ACCESS_KEY"/>
+            <secret_access_key from_env="S3_SECRET_KEY"/>
+        </backups>
+    </s3>
+
     <!-- Where users, roles and grants live. SQL-created access entities go to Keeper, so a role
          created on one node exists on all of them: no ON CLUSTER needed for RBAC. -->
     <user_directories replace="replace">

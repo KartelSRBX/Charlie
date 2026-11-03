@@ -45,6 +45,16 @@ class Ldap(BaseModel):
         return ",".join(f"dc={part}" for part in self.domain.split("."))
 
 
+class Minio(BaseModel):
+    """S3-compatible object storage that backups go to (a stand-in for S3, GCS or Ceph)."""
+
+    model_config = ConfigDict(extra="forbid")
+    image: str = "bitnamilegacy/minio:2025.4.22-debian-12-r1"
+    port: int = 9100  # S3 API on the host
+    console_port: int = 9101
+    bucket: str = "backups"
+
+
 class Replica(BaseModel):
     """One ClickHouse server: shard 1, replica 2 is called ``ch-s1-r2``."""
 
@@ -86,6 +96,7 @@ class Topology(BaseModel):
     ports: Ports = Ports()
     postgres: Postgres | None = None
     ldap: Ldap | None = None
+    minio: Minio | None = None
 
     @field_validator("keepers")
     @classmethod
@@ -105,6 +116,8 @@ class Topology(BaseModel):
         keeper = set(range(self.ports.keeper_base, self.ports.keeper_base + self.keepers))
         fixed = {self.ports.prometheus, self.ports.grafana}
         fixed |= {x.port for x in (self.postgres, self.ldap) if x}
+        if self.minio:
+            fixed |= {self.minio.port, self.minio.console_port}
         clashes = (
             (http & native)
             | (http & keeper)
