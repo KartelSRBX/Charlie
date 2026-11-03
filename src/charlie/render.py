@@ -32,6 +32,10 @@ def render(topo: Topology) -> dict[str, str]:
         "prometheus/prometheus.yml": env.get_template("prometheus.yml.j2").render(**ctx),
         "config/cluster.xml": env.get_template("cluster.xml.j2").render(**ctx),
     }
+    if topo.postgres and topo.ldap:
+        files["postgres/02_hba.sh"] = env.get_template("pg_init.sh.j2").render(**ctx)
+    if topo.ldap:
+        files["ldap/10-acl.ldif"] = env.get_template("ldap_acl.ldif.j2").render(**ctx)
     for node in topo.nodes:
         files[f"config/{node.name}/macros.xml"] = env.get_template("macros.xml.j2").render(
             node=node, **ctx

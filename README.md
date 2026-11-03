@@ -24,6 +24,7 @@ each acknowledged row exists exactly once and that all replicas hold identical d
 | Inter-node trust | Distributed queries run as the calling user over a shared `secret`, so no passwords are stored in the cluster definition. Secrets come from the environment (`from_env`) and are never rendered into files |
 | Observability | Every server and Keeper exposes Prometheus metrics; one dashboard answers "is the cluster healthy?" in six numbers |
 | Failure drills | Six scripted drills run in CI against the real containers (below) |
+| Access as code | One reviewed `access/model.yaml` becomes roles, grants, row policies, quotas and settings profiles in **ClickHouse and PostgreSQL**. `charlie access plan / apply / drift`; people come from LDAP groups, and leaving a group removes access in both databases ([Access as code](#access-as-code)) |
 
 ## Architecture
 
@@ -64,7 +65,8 @@ Requirements: Docker with Compose v2, about 4 GB RAM free, Python 3.11+.
 
 ```bash
 make dev && . .venv/bin/activate   # the `charlie` command
-make up       # 3 Keepers, 4 ClickHouse servers, Prometheus, Grafana; applies the schema
+make up       # 3 Keepers, 4 ClickHouse servers, PostgreSQL, LDAP, Prometheus, Grafana; applies the schema
+make access   # seed the demo directory and apply access/model.yaml to both databases
 make load     # 100k rows through the Distributed table
 make status   # keeper roles, replica health, rows per replica
 make verify   # totals, duplicates, replica equality, shard balance
@@ -129,6 +131,101 @@ both, while the dashboard above updates. A run on the 4-vCPU test machine:
 on one small machine with all seven containers on it), 532 client retries absorbed, none lost,
 none duplicated, replicas identical to the row.
 
+## Access as code
+
+Who may do what is the part of a database that rots fastest: a `GRANT` typed during an
+incident, a leaver nobody revoked, a role that means something different in each engine.
+Here it is one file, reviewed like code, compiled for both engines and compared with reality.
+
+```yaml
+# access/model.yaml (abridged)
+levels:                       # a role is <domain>_<level>; nothing else is accepted
+  ro:    { clickhouse: [SHOW, SELECT], postgres: [SELECT], profile: analyst, quota: analyst_daily }
+  rw:    { clickhouse: [SHOW, SELECT, INSERT], postgres: [SELECT, INSERT, UPDATE], profile: writer }
+domains:                      # a business area and what it owns in each engine
+  igaming: { clickhouse: { databases: [igaming] }, postgres: { schemas: [igaming] } }
+  finance: { clickhouse: { databases: [finance] }, postgres: { schemas: [finance] } }
+scoped_roles:                 # a base role restricted to some rows
+  - { name: igaming_ro_aurora, base: igaming_ro, row_policies: { igaming.bets_local: "brand = 'aurora'" } }
+service_accounts:             # the only accounts with a password in the database
+  svc_loader: { roles: [igaming_rw], password_env: SVC_LOADER_PASSWORD }
+```
+
+Two domains and three levels give six roles in each engine; `charlie access plan` expands the
+file into 62 ClickHouse objects (roles, grants, memberships, three row policies, two settings
+profiles, a quota) and 82 PostgreSQL ones, and a plan against a cluster that is already right
+takes about a second for both engines.
+
+```text
+$ charlie access drift                 # someone ran GRANT SELECT ON finance.* TO igaming_ro by hand
+== clickhouse
+   - grant SELECT ON finance.* TO igaming_ro   (configured, but not in the model)
+   0 to add, 0 to change, 1 not in the model
+
+configured access differs from access/model.yaml          # exit code 1
+$ charlie access apply                 # adds are applied, removals are not
+   1 removals skipped: run with --prune to delete what the model lacks
+$ charlie access apply --prune
+  REVOKE SELECT ON finance.* FROM `igaming_ro`
+```
+
+**How it works.** Each engine's adapter reduces both sides to a set of *facts* (kind, key,
+attributes): the model on one side, `SHOW GRANTS` and the `system.*` tables (or the PostgreSQL
+catalog) on the other. The diff is engine-neutral; the adapter turns each difference into SQL.
+Additions run before removals so a swap never leaves a gap, and removals need `--prune` because
+deleting is the dangerous half. PostgreSQL runs the whole plan in one transaction; ClickHouse DDL
+is not transactional, so a failed apply is simply re-run, which is safe because every statement
+is idempotent. In ClickHouse, access entities live in Keeper (`user_directories` with a
+`replicated` storage), so a role created on one node exists on all four without `ON CLUSTER`.
+Anything in that storage which the model does not mention is drift, including privilege kinds the
+model cannot express (`WITH GRANT OPTION`), which are reported rather than silently ignored.
+
+**People come from the directory, not from the file.** A real deployment points at authentik,
+Keycloak (LDAP provider), FreeIPA or Active Directory; the stand uses an OpenLDAP container,
+which looks the same from the database's side. Membership of the group `db_igaming_ro` means the
+role `igaming_ro`. `charlie access apply` reads the groups and creates or removes, in both
+databases, a login for each person and the memberships that follow from their groups:
+
+| | ClickHouse | PostgreSQL |
+| --- | --- | --- |
+| Person | `CREATE USER bob IDENTIFIED WITH ldap SERVER 'directory'` | `LOGIN` role with no password; `pg_hba.conf` sends everyone but `svc_*` to LDAP |
+| Group `db_x` | `GRANT x TO bob` | `GRANT x TO bob` |
+| Leaves a group | membership revoked | membership revoked |
+| Leaves the company | user dropped | role dropped, open sessions terminated first |
+
+The directory is the authority on people, so these removals do **not** need `--prune`. The delay
+between a change in the directory and a change in the databases is the interval at which `apply`
+runs (a cron job, a CI schedule or an IdP webhook); a deleted or disabled account fails to log in
+immediately, because the password is checked against LDAP every time. The offboarding drill
+(`tests/e2e/test_access.py`) removes a person from the directory, applies, and asserts that the
+person's open PostgreSQL session is gone and that neither database knows the name any more.
+
+**What was found on the way** (each has a test or a guard):
+
+- **A row policy on a Distributed table does nothing.** The shards run the query as the calling
+  user and never see the policy, so every row comes back. It has to be on the table that stores
+  the data (`bets_local`). `charlie access plan` refuses a policy on a Distributed table.
+- **Once a table has any row policy, users matched by none of them see nothing.** Every
+  restricted table therefore also gets a generated `allow_all` policy `TO ALL EXCEPT` the
+  scoped roles.
+- **Two scoped roles on one person give the union of their rows**, not the intersection, which
+  is why the model says "give people one or the other".
+- **An LDAP *user directory* breaks Distributed queries.** Those users only exist on the node they
+  logged in to; the other shards, which receive the query over the interserver secret, answer
+  `Unable to map external roles`. LDAP-authenticated SQL users exist everywhere, and Distributed
+  queries as an LDAP user work on every node (tested on all four).
+- **ClickHouse looks up a user's groups with the user's own LDAP bind**, so the directory has to
+  let signed-in users read the group branch. That ACL is generated into `deploy/ldap/`.
+- **Group privileges such as `ALL` or `CREATE` are not accepted** in the model: the server prints
+  them expanded, so they could never be compared. Privileges are an explicit whitelist.
+- **Passwords are not diffed.** Only the kind of authentication is compared; rotating a service
+  password is a deliberate act. Secrets come from the environment, never from the model, and are
+  redacted in what `plan` and `apply` print.
+
+Try it: `make up access`, then `charlie directory show`, `charlie access drift`, and log in as
+`bob` / `bob-pass` on `localhost:8123` (ClickHouse) or `localhost:5432/app` (PostgreSQL). The demo
+people are in `fixtures/directory/people.yaml`; their passwords are demo-only.
+
 ## Design notes and trade-offs
 
 - **An insert is acknowledged after one replica has it.** The default is availability: with
@@ -169,6 +266,9 @@ templates/                 Jinja templates for compose, Keeper, macros, remote_s
 config/                    static server settings and the bootstrap admin
 deploy/                    GENERATED. CI fails if it differs from the topology
 schema/migrations/         ordered, checksummed, ON CLUSTER SQL
+access/model.yaml          roles, scoped roles, profiles, quotas, service accounts
+src/charlie/access/        model -> facts -> diff -> SQL for ClickHouse and PostgreSQL; LDAP seeding
+fixtures/                  demo PostgreSQL data and demo LDAP people
 src/charlie/migrate.py     the migration runner
 src/charlie/loadgen.py     deterministic, retry-safe load generator
 src/charlie/status.py      health and consistency checks
@@ -185,10 +285,9 @@ make dashboards   # rebuild grafana/dashboards/*.json from grafana/build_dashboa
 make check        # deploy/ must match topology.yaml
 ```
 
-Unit tests need no Docker (35 of them: topology validation, rendered XML, migration logic,
-deterministic batches). CI runs them, then starts the cluster and runs every drill.
+Unit tests need no Docker (78 of them: topology validation, rendered XML, migration logic,
+deterministic batches, the access model and its diff). CI runs them, then starts the cluster and runs every drill.
 
 ## Next
 
-Roles, users, quotas and row policies as code across ClickHouse and PostgreSQL, with group
-mapping from LDAP; then backups to object storage, restore drills and rolling upgrades.
+Backups to object storage with restore drills, rolling upgrades, and benchmarks with numbers.

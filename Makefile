@@ -1,6 +1,9 @@
 .DEFAULT_GOAL := help
 COMPOSE ?= docker compose -f deploy/docker-compose.yml
 PY ?= python3
+# Demo-only passwords of the service accounts; real ones come from a secret store.
+export SVC_LOADER_PASSWORD ?= loader-pass
+export SVC_REPORTING_PASSWORD ?= report-pass
 CHARLIE ?= $(if $(wildcard .venv/bin/charlie),.venv/bin/charlie,charlie)
 
 help: ## Show targets
@@ -25,6 +28,16 @@ down: ## Stop the cluster, keep data
 clean: ## Stop the cluster and delete all data
 	$(COMPOSE) down -v
 
+access-plan: ## Show how ClickHouse and PostgreSQL differ from access/model.yaml
+	$(CHARLIE) access plan
+
+access: ## Seed the demo LDAP directory, then make both databases match the access model
+	$(CHARLIE) directory seed
+	$(CHARLIE) access apply
+
+access-drift: ## Exit 1 when either database differs from the access model
+	$(CHARLIE) access drift
+
 status: ## Keeper and replica health
 	$(CHARLIE) status
 
@@ -43,7 +56,7 @@ dev: ## Create a virtualenv with dev dependencies
 test: ## Unit tests
 	pytest
 
-e2e: ## Failure drills against the running cluster (takes ~6 minutes)
+e2e: ## Access tests and failure drills against the running cluster (takes ~7 minutes)
 	pytest -m e2e tests/e2e
 
 lint: ## Ruff lint + format check

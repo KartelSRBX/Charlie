@@ -1,0 +1,14 @@
+#!/bin/sh
+# Generated from topology.yaml. Runs once, when the PostgreSQL data directory is created.
+# Service accounts keep a password in the database; every other login is checked against the
+# directory, so the same person and the same password work in ClickHouse and PostgreSQL.
+set -e
+{
+cat <<'RULES'
+host {{ t.postgres.database }} postgres all scram-sha-256
+host {{ t.postgres.database }} /^svc_.* all scram-sha-256
+host {{ t.postgres.database }} all all ldap ldapserver=ldap ldapport=389 ldapprefix="cn=" ldapsuffix=",ou=people,{{ t.ldap.base_dn }}"
+RULES
+cat "$PGDATA/pg_hba.conf"
+} > /tmp/pg_hba.new
+cat /tmp/pg_hba.new > "$PGDATA/pg_hba.conf"

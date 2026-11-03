@@ -11,6 +11,33 @@
         <operation_timeout_ms>5000</operation_timeout_ms>
     </zookeeper>
 
+    <!-- Where users, roles and grants live. SQL-created access entities go to Keeper, so a role
+         created on one node exists on all of them: no ON CLUSTER needed for RBAC. -->
+    <user_directories replace="replace">
+        <users_xml>
+            <path>users.xml</path>
+        </users_xml>
+        <replicated>
+            <zookeeper_path>/clickhouse/access</zookeeper_path>
+        </replicated>
+    </user_directories>
+{% if t.ldap %}
+
+    <!-- People are SQL users that check their password against this server (IDENTIFIED WITH ldap),
+         and `charlie access apply` keeps their roles in line with the directory groups. They are
+         not an LDAP *user directory* on purpose: those users exist only on the node they logged
+         in to, so a Distributed query, which re-runs as the same user on the other shards, fails. -->
+    <ldap_servers>
+        <directory>
+            <host>ldap</host>
+            <port>389</port>
+            <bind_dn>cn={user_name},ou=people,{{ t.ldap.base_dn }}</bind_dn>
+            <enable_tls>no</enable_tls>
+            <verification_cooldown>5</verification_cooldown>
+        </directory>
+    </ldap_servers>
+{% endif %}
+
     <remote_servers>
         <{{ t.cluster }}>
             <!-- Distributed queries run as the initiating user on every shard, authenticated

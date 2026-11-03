@@ -69,6 +69,53 @@ services:
       - {{ n.volume }}:/var/lib/clickhouse
 
 {% endfor %}
+{% if t.postgres %}
+  postgres:
+    image: {{ t.postgres.image }}
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${PG_ADMIN_PASSWORD:-charlie}
+      POSTGRES_DB: {{ t.postgres.database }}
+    ports:
+      - "{{ t.postgres.port }}:5432"
+    volumes:
+      - ../fixtures/postgres/01_app.sql:/docker-entrypoint-initdb.d/01_app.sql:ro
+{% if t.ldap %}
+      - ./postgres/02_hba.sh:/docker-entrypoint-initdb.d/02_hba.sh:ro
+{% endif %}
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d {{ t.postgres.database }}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+{% endif %}
+{% if t.ldap %}
+  ldap:
+    image: {{ t.ldap.image }}
+    restart: unless-stopped
+    hostname: ldap
+    command: ["--loglevel", "warning"]
+    environment:
+      LDAP_ORGANISATION: Charlie
+      LDAP_DOMAIN: {{ t.ldap.domain }}
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:-charlie}
+      LDAP_TLS: "false"
+      LDAP_SEED_INTERNAL_LDIF_PATH: /seed/ldif
+    ports:
+      - "{{ t.ldap.port }}:389"
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+      - ./ldap:/seed/ldif:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b {{ t.ldap.base_dn }} -D cn=admin,{{ t.ldap.base_dn }} -w $${LDAP_ADMIN_PASSWORD} -s base dn >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+{% endif %}
   prometheus:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
@@ -99,6 +146,13 @@ services:
       - prometheus
 
 volumes:
+{% if t.postgres %}
+  postgres-data:
+{% endif %}
+{% if t.ldap %}
+  ldap-data:
+  ldap-config:
+{% endif %}
 {% for k in t.keeper_nodes %}
   {{ k.volume }}:
 {% endfor %}

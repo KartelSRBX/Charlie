@@ -23,6 +23,28 @@ class Ports(BaseModel):
     grafana: int = 3000
 
 
+class Postgres(BaseModel):
+    """A PostgreSQL server, there to show one access model compiled for two engines."""
+
+    model_config = ConfigDict(extra="forbid")
+    image: str = "postgres:16-alpine"
+    port: int = 5432
+    database: str = "app"
+
+
+class Ldap(BaseModel):
+    """A directory standing in for the identity provider's LDAP interface (authentik, Keycloak)."""
+
+    model_config = ConfigDict(extra="forbid")
+    image: str = "osixia/openldap:1.5.0"
+    port: int = 3890
+    domain: str = "charlie.local"
+
+    @property
+    def base_dn(self) -> str:
+        return ",".join(f"dc={part}" for part in self.domain.split("."))
+
+
 class Replica(BaseModel):
     """One ClickHouse server: shard 1, replica 2 is called ``ch-s1-r2``."""
 
@@ -62,6 +84,8 @@ class Topology(BaseModel):
     shards: int = Field(ge=1, le=16)
     replicas: int = Field(ge=1, le=5)
     ports: Ports = Ports()
+    postgres: Postgres | None = None
+    ldap: Ldap | None = None
 
     @field_validator("keepers")
     @classmethod
@@ -80,6 +104,7 @@ class Topology(BaseModel):
         native = set(range(self.ports.native_base, self.ports.native_base + n))
         keeper = set(range(self.ports.keeper_base, self.ports.keeper_base + self.keepers))
         fixed = {self.ports.prometheus, self.ports.grafana}
+        fixed |= {x.port for x in (self.postgres, self.ldap) if x}
         clashes = (
             (http & native)
             | (http & keeper)

@@ -21,3 +21,15 @@ ports:
   keeper_base: 9181    # keeper-1 -> 9181 (four-letter-word commands for `charlie status`)
   prometheus: 9090
   grafana: 3000
+
+# Optional neighbours for the access-as-code stage: one model, compiled for two engines, with
+# group membership coming from an LDAP directory. Delete a block to leave that part out.
+postgres:
+  image: postgres:16-alpine
+  port: 5432
+  database: app
+
+ldap:
+  image: osixia/openldap:1.5.0
+  port: 3890
+  domain: charlie.local

@@ -1,0 +1,81 @@
+# The access model: who may do what, for every engine, in one reviewed file.
+#
+# `charlie access plan|apply|drift` compile this into SQL for ClickHouse and PostgreSQL and
+# compare it with what is really configured. Anything configured by hand that is not written here
+# is drift. Group membership (who is in which role) is NOT here: it belongs to the identity
+# provider, which exposes it as LDAP groups named `db_<role>`.
+version: 1
+
+# Role names are <domain>_<level>. Nothing else is accepted, so a role's name tells you its
+# reach. The privilege lists are explicit on purpose: `ALL` expands differently per engine and
+# version, which makes it impossible to review and to compare.
+levels:
+  ro:
+    clickhouse: [SHOW, SELECT]
+    postgres: [SELECT]
+    profile: analyst
+    quota: analyst_daily
+  rw:
+    clickhouse: [SHOW, SELECT, INSERT]
+    postgres: [SELECT, INSERT, UPDATE]
+    profile: writer
+  admin:
+    clickhouse: [SHOW, SELECT, INSERT, ALTER, CREATE TABLE, CREATE VIEW, DROP TABLE, DROP VIEW, TRUNCATE, OPTIMIZE]
+    postgres: [SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER]
+    postgres_schema: [USAGE, CREATE]
+
+# A domain is a business area and what it owns in each engine.
+domains:
+  igaming:
+    clickhouse: { databases: [igaming] }
+    postgres: { schemas: [igaming] }
+  finance:
+    clickhouse: { databases: [finance] }
+    postgres: { schemas: [finance] }
+
+# A scoped role is a base role restricted to some rows (ClickHouse row policies). It gets the
+# base role's privileges, limits and quota, but not membership in it: a user holding both would
+# see the union of the two, so give people one or the other.
+#
+# Row policies go on the table that stores the data (`bets_local`), not on the Distributed table
+# in front of it: a policy on `bets` is silently ignored, because the shards, which run the query
+# as the calling user, never see it. `charlie access plan` refuses a policy on a Distributed table.
+scoped_roles:
+  - name: igaming_ro_aurora
+    base: igaming_ro
+    row_policies:
+      igaming.bets_local: "brand = 'aurora'"
+  - name: igaming_ro_bluefin
+    base: igaming_ro
+    row_policies:
+      igaming.bets_local: "brand = 'bluefin'"
+
+# Settings profiles (ClickHouse). A bare value is changeable by the user, `readonly: true`
+# pins it, `min`/`max` bound it.
+profiles:
+  analyst:
+    max_execution_time: { value: 60, max: 300 }
+    max_memory_usage: { value: 4000000000, max: 8000000000, readonly: true }
+    max_threads: 4
+    max_rows_to_read: 2000000000
+  writer:
+    max_execution_time: 120
+    max_insert_threads: 4
+
+# Quotas (ClickHouse): per role, per interval.
+quotas:
+  analyst_daily:
+    interval: 1 day
+    max_queries: 5000
+    max_result_rows: 500000000
+    max_read_rows: 5000000000
+
+# Non-human accounts that live in the database itself. People come from the directory.
+# The password is read from the named environment variable, never stored here.
+service_accounts:
+  svc_loader:
+    roles: [igaming_rw]
+    password_env: SVC_LOADER_PASSWORD
+  svc_reporting:
+    roles: [igaming_ro, finance_ro]
+    password_env: SVC_REPORTING_PASSWORD
