@@ -12,6 +12,10 @@ x-clickhouse: &clickhouse
     CLICKHOUSE_SKIP_USER_SETUP: "1"
     CH_ADMIN_PASSWORD: ${CH_ADMIN_PASSWORD:-charlie}
     CH_INTERSERVER_SECRET: ${CH_INTERSERVER_SECRET:-charlie-interserver-secret}
+{% if t.minio %}
+    S3_ACCESS_KEY: ${MINIO_ROOT_USER:-charlie}
+    S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-charlie-secret}
+{% endif %}
   healthcheck:
     test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
     interval: 3s
@@ -96,6 +100,13 @@ services:
     image: {{ t.ldap.image }}
     restart: unless-stopped
     hostname: ldap
+    # The image's seed-copy step removes its target directory on the first start and then fails
+    # on every restart; recreating the directory first makes `docker restart` safe.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - mkdir -p /container/service/slapd/assets/config/bootstrap/ldif/custom && exec /container/tool/run "$$@"
+      - --
     command: ["--loglevel", "warning"]
     environment:
       LDAP_ORGANISATION: Charlie
@@ -111,6 +122,27 @@ services:
       - ./ldap:/seed/ldif:ro
     healthcheck:
       test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b {{ t.ldap.base_dn }} -D cn=admin,{{ t.ldap.base_dn }} -w $${LDAP_ADMIN_PASSWORD} -s base dn >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+{% endif %}
+{% if t.minio %}
+  minio:
+    image: {{ t.minio.image }}
+    restart: unless-stopped
+    hostname: minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-charlie}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-charlie-secret}
+      MINIO_DEFAULT_BUCKETS: {{ t.minio.bucket }}
+    ports:
+      - "{{ t.minio.port }}:9000"
+      - "{{ t.minio.console_port }}:9001"
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/ready"]
       interval: 3s
       timeout: 3s
       retries: 40
@@ -146,6 +178,9 @@ services:
       - prometheus
 
 volumes:
+{% if t.minio %}
+  minio-data:
+{% endif %}
 {% if t.postgres %}
   postgres-data:
 {% endif %}

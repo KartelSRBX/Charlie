@@ -74,7 +74,12 @@ def test_compose_is_valid_yaml_with_a_service_per_node(topo):
     assert expected <= set(compose["services"])
     for n in topo.nodes:
         assert set(compose["services"][n.name]["depends_on"]) == {k.name for k in topo.keeper_nodes}
-    stateful = {f"{name}-data" for name in expected} | {"postgres-data", "ldap-data", "ldap-config"}
+    stateful = {f"{name}-data" for name in expected} | {
+        "postgres-data",
+        "ldap-data",
+        "ldap-config",
+        "minio-data",
+    }
     assert set(compose["volumes"]) == stateful
 
 
@@ -118,3 +123,26 @@ def test_clickhouse_has_no_ldap_user_directory(topo):
     xml = ET.fromstring(render.render(topo)["config/cluster.xml"])
     assert xml.find("user_directories/ldap") is None
     assert xml.find("ldap_servers/directory/host").text == "ldap"
+
+
+def test_backup_credentials_are_read_from_the_environment_and_matched_by_url(topo):
+    xml = ET.fromstring(render.render(topo)["config/cluster.xml"])
+    ep = xml.find("s3/backups")
+    assert ep.findtext("endpoint") == f"http://minio:9000/{topo.minio.bucket}/"
+    assert ep.find("access_key_id").get("from_env") == "S3_ACCESS_KEY"
+    assert ep.find("secret_access_key").get("from_env") == "S3_SECRET_KEY"
+    blob = "\n".join(render.render(topo).values())
+    assert "charlie-secret" not in blob.replace("${MINIO_ROOT_PASSWORD:-charlie-secret}", "")
+
+
+def test_minio_comes_with_its_bucket_and_a_health_check(topo):
+    svc = yaml.safe_load(render.render(topo)["docker-compose.yml"])["services"]["minio"]
+    assert svc["environment"]["MINIO_DEFAULT_BUCKETS"] == topo.minio.bucket
+    assert "healthcheck" in svc
+
+
+def test_without_a_minio_block_nothing_about_backups_is_rendered(topo):
+    plain = topo.model_copy(update={"minio": None})
+    files = render.render(plain)
+    assert "minio" not in yaml.safe_load(files["docker-compose.yml"])["services"]
+    assert "<s3>" not in files["config/cluster.xml"]
