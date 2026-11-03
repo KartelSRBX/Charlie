@@ -62,6 +62,8 @@ jobs:
         run: |
           charlie load --batches 20 --batch-size 5000
           charlie verify --expect 100000
+      - name: Benchmarks run end to end (smoke test, the numbers are not meaningful here)
+        run: charlie bench --quick --rows 200000
       - name: Prometheus scrapes every server and Keeper
         run: |
           sleep 15

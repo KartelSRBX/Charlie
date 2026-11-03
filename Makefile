@@ -29,6 +29,9 @@ down: ## Stop the cluster, keep data
 clean: ## Stop the cluster and delete all data
 	$(COMPOSE) down -v
 
+bench: ## Benchmarks in a scratch database; writes docs/benchmarks.md (takes ~2.5 minutes)
+	$(CHARLIE) bench --out docs/benchmarks.md
+
 upgrade: ## Rolling upgrade to the images in topology.yaml, under load (render first)
 	$(CHARLIE) upgrade
 
