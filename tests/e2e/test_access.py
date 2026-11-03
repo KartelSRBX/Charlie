@@ -22,6 +22,7 @@ from .conftest import ROOT
 
 pytestmark = pytest.mark.e2e
 
+TEST_BETS = 1_000_000_000_000  # bet_ids at or above this belong to these tests
 SVC = {"SVC_LOADER_PASSWORD": "loader-pass", "SVC_REPORTING_PASSWORD": "report-pass"}
 
 
@@ -45,20 +46,28 @@ def run(*args: str) -> int:
     return main(["access", *args])
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def stand(topo, m, ldap, schema, _service_passwords):
     """A directory with the demo people and the databases brought in line with the model."""
     directory.seed(ldap, topo.ldap.base_dn, m, ROOT / "fixtures" / "directory" / "people.yaml")
     assert run("apply", "--prune") in (0, 1)
     assert run("drift") == 0
     c = ch.first_alive(topo)
+    purge = (
+        "ALTER TABLE igaming.bets_local ON CLUSTER '{cluster}' "
+        f"DELETE WHERE bet_id >= {TEST_BETS} SETTINGS mutations_sync = 2"
+    )
+    c.command(purge)  # leftovers of an interrupted run
     c.command(
         "INSERT INTO igaming.bets (bet_id, ts, player_id, brand, game, currency, stake, payout) "
-        "SELECT 1000000000000 + number, now(), number, "
+        f"SELECT {TEST_BETS} + number, now(), number, "
         "arrayElement(['aurora','bluefin','cobalt'], 1 + number % 3), 'slots', 'EUR', 1, 0 "
         "FROM numbers(300)"
     )
     c.command("SYSTEM FLUSH DISTRIBUTED igaming.bets ON CLUSTER '{cluster}'")
+    yield
+    # The failure drills assert exact row counts, so the rows made here must not outlive the tests.
+    c.command(purge)
 
 
 def ch_as(topo, user: str, password: str, node: int = 0):
