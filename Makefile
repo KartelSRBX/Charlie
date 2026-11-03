@@ -29,6 +29,9 @@ down: ## Stop the cluster, keep data
 clean: ## Stop the cluster and delete all data
 	$(COMPOSE) down -v
 
+upgrade: ## Rolling upgrade to the images in topology.yaml, under load (render first)
+	$(CHARLIE) upgrade
+
 backup: ## Full backup of every database to the object store
 	$(CHARLIE) backup create
 

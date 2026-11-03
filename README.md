@@ -24,6 +24,7 @@ each acknowledged row exists exactly once and that all replicas hold identical d
 | Inter-node trust | Distributed queries run as the calling user over a shared `secret`, so no passwords are stored in the cluster definition. Secrets come from the environment (`from_env`) and are never rendered into files |
 | Observability | Every server and Keeper exposes Prometheus metrics; one dashboard answers "is the cluster healthy?" in six numbers |
 | Failure drills | Six scripted drills run in CI against the real containers (below) |
+| Rolling upgrade | Change `images` in `topology.yaml`, `charlie render`, `charlie upgrade`: Keepers (leader last) then servers, one at a time, each waiting for Keeper and an empty replication queue. CI upgrades 24.3 to 24.8 while writing and reading ([Rolling upgrade](#rolling-upgrade)) |
 | Backups | `charlie backup create / list / restore / drill`: full and incremental `BACKUP ... ON CLUSTER` to S3-compatible storage, credentials only in server config. The drill drops every database, restores, and compares row counts and content hashes ([Backups and restore](#backups-and-restore)) |
 | Access as code | One reviewed `access/model.yaml` becomes roles, grants, row policies, quotas and settings profiles in **ClickHouse and PostgreSQL**. `charlie access plan / apply / drift`; people come from LDAP groups, and leaving a group removes access in both databases ([Access as code](#access-as-code)) |
 
@@ -282,6 +283,55 @@ What the numbers say, and what they do not:
 `make backup` takes a backup, `make backup-drill` runs the drill. Point `topology.yaml`'s
 `minio` block at real S3 for anything else.
 
+## Rolling upgrade
+
+The upgrade is a diff and a command. Change `images` in `topology.yaml`, run `charlie render`
+(the change to `deploy/` is the review), then `charlie upgrade`:
+
+- **Keepers first, followers before the leader.** Upgrading the coordination layer before its clients is the
+  safe order, and the quorum of two survives one Keeper restarting at a time.
+- **Then ClickHouse, one server at a time**, replica 2 of every shard before replica 1. A step is
+  finished only when the container is healthy, connected to Keeper, not read-only, and has an
+  empty replication queue; otherwise the next restart could take down the replica that has the
+  data the other is still fetching.
+- **It is idempotent.** Servers already on the target image are skipped, so a failed run is simply
+  run again.
+- **It checks itself.** While it works, four writers insert and a reader queries with failover; at
+  the end it asserts that every acknowledged row exists exactly once and all replicas are equal.
+
+```text
+$ sed -i 's/:24.3/:24.8/' topology.yaml && charlie render && charlie upgrade
+7 of 7 servers need the new image
+  keeper-2: clickhouse/clickhouse-keeper:24.3 -> clickhouse/clickhouse-keeper:24.8 in 78s
+  keeper-3: ... in 47s
+  keeper-1: ... in 42s
+  ch-s1-r2: clickhouse/clickhouse-server:24.3 -> clickhouse/clickhouse-server:24.8 in 24s
+  ch-s2-r2: ... in 14s
+  ch-s1-r1: ... in 16s
+  ch-s2-r1: ... in 14s
+servers: 24.3.18.7 -> 24.8.14.39 in 240s
+under load: 7,048,000 rows written, 697 retries, 0 lost batches; 605 reads, 0 failed
+```
+
+That run is 24.3 LTS to 24.8 LTS on a 2x2 cluster with 3 Keepers on a laptop, writing about
+29,000 rows/s throughout. What it shows and what it does not:
+
+- **No acknowledged write was lost and no read failed** (reads fail over between nodes, as an
+  application's client would). The 697 retries are the cost: writes that landed on a node during
+  its restart were retried against another one, with the same deterministic batch, so the
+  deduplication window makes them exactly-once.
+- **A server takes 14-24 s, a Keeper 42-78 s.** The Keeper step is slower because its readiness
+  condition is cluster-wide: every server must reconnect to Keeper and drain its queue while the
+  load keeps coming. Do not read the numbers as a production estimate: data
+  volume decides how long a replica needs to catch up.
+- **It upgrades one version line, not several.** Skipping LTS releases needs the release notes'
+  intermediate stops, not a longer command. The drill tests the realistic hop.
+- **No rollback is promised.** Downgrading a ClickHouse data directory is not generally
+  supported, so the safety net is the previous section: take a backup, and have restored one.
+
+CI runs this as its own job: it starts the *old* images, loads data, switches `topology.yaml` to
+the new ones and upgrades under load (`make upgrade` does the last step locally).
+
 ## Design notes and trade-offs
 
 - **An insert is acknowledged after one replica has it.** The default is availability: with
@@ -322,6 +372,7 @@ templates/                 Jinja templates for compose, Keeper, macros, remote_s
 config/                    static server settings and the bootstrap admin
 deploy/                    GENERATED. CI fails if it differs from the topology
 schema/migrations/         ordered, checksummed, ON CLUSTER SQL
+src/charlie/upgrade.py     rolling upgrade with its own consistency check
 src/charlie/backup.py      backup / restore / restore drill
 access/model.yaml          roles, scoped roles, profiles, quotas, service accounts
 src/charlie/access/        model -> facts -> diff -> SQL for ClickHouse and PostgreSQL; LDAP seeding
@@ -342,9 +393,9 @@ make dashboards   # rebuild grafana/dashboards/*.json from grafana/build_dashboa
 make check        # deploy/ must match topology.yaml
 ```
 
-Unit tests need no Docker (82 of them: topology validation, rendered XML, migration logic,
+Unit tests need no Docker (85 of them: topology validation, rendered XML, migration logic,
 deterministic batches, the access model and its diff). CI runs them, then starts the cluster and runs every drill.
 
 ## Next
 
-Rolling upgrades under load, and benchmarks with numbers.
+Benchmarks with numbers.

@@ -129,6 +129,23 @@ def cmd_backup(args, topo) -> int:
     return 0
 
 
+def cmd_upgrade(args, topo) -> int:
+    from . import upgrade
+
+    rep = upgrade.run(topo, under_load=not args.no_load)
+    before = sorted(set(rep.versions_before.values()))
+    after = sorted(set(rep.versions_after.values()))
+    print(f"servers: {', '.join(before)} -> {', '.join(after)} in {rep.seconds:.0f}s")
+    if not args.no_load:
+        print(
+            f"under load: {rep.rows_loaded:,} rows written, {rep.retries} retries, "
+            f"{rep.failed_batches} lost batches; {rep.reads} reads, {rep.read_errors} failed"
+        )
+    for p in rep.problems:
+        print(f"PROBLEM: {p}")
+    return 0 if rep.ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="charlie", description=__doc__)
     p.add_argument("--topology", default=str(ROOT / "topology.yaml"))
@@ -162,6 +179,10 @@ def main(argv: list[str] | None = None) -> int:
     bd = bsub.add_parser("drill", help="back up, destroy, restore, compare (destructive!)")
     bd.add_argument("--rows", type=int, default=200_000)
     b.set_defaults(fn=cmd_backup)
+
+    u = sub.add_parser("upgrade", help="rolling upgrade to the images in topology.yaml")
+    u.add_argument("--no-load", action="store_true", help="do not write and read during it")
+    u.set_defaults(fn=cmd_upgrade)
 
     access_cli.register(sub)
     access_cli.register_directory(sub)
