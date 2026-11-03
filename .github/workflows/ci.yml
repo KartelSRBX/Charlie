@@ -40,7 +40,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e '.[dev]'
-      - name: Start 3 Keepers and 4 ClickHouse servers
+      - name: Start 3 Keepers, 4 ClickHouse servers, PostgreSQL and LDAP
         run: docker compose -f deploy/docker-compose.yml up -d --wait
       - name: "Apply the schema (twice, the second run must be a no-op)"
         run: |
@@ -48,6 +48,16 @@ jobs:
           charlie migrate
       - name: Cluster is healthy
         run: charlie status
+      - name: "Access as code: seed the demo directory, apply the model (twice), check for drift"
+        env:
+          SVC_LOADER_PASSWORD: loader-pass
+          SVC_REPORTING_PASSWORD: report-pass
+        run: |
+          charlie directory seed
+          charlie access plan
+          charlie access apply
+          charlie access apply | grep -c "in sync" | grep -qx 2
+          charlie access drift
       - name: Load, then verify totals, duplicates and replica equality
         run: |
           charlie load --batches 20 --batch-size 5000
@@ -58,8 +68,11 @@ jobs:
           up=$(curl -s 'localhost:9090/api/v1/query?query=count(up==1)' | python -c "import json,sys; print(json.load(sys.stdin)['data']['result'][0]['value'][1])")
           echo "targets up: $up"
           test "$up" = 7
-      - name: Failure drills (replica, Keeper, quorum loss, whole shard, rolling restart)
+      - name: Access tests and failure drills (replica, Keeper, quorum loss, whole shard, rolling restart)
         shell: bash
+        env:
+          SVC_LOADER_PASSWORD: loader-pass
+          SVC_REPORTING_PASSWORD: report-pass
         run: pytest -m e2e tests/e2e -v --tb=short -rA 2>&1 | tee e2e.log
       - name: Failure report
         if: failure()

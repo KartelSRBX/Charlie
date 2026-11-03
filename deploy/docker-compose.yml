@@ -142,6 +142,47 @@ services:
       - ./config/users.xml:/etc/clickhouse-server/users.d/10-users.xml:ro
       - ch-s2-r2-data:/var/lib/clickhouse
 
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${PG_ADMIN_PASSWORD:-charlie}
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - ../fixtures/postgres/01_app.sql:/docker-entrypoint-initdb.d/01_app.sql:ro
+      - ./postgres/02_hba.sh:/docker-entrypoint-initdb.d/02_hba.sh:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  ldap:
+    image: osixia/openldap:1.5.0
+    restart: unless-stopped
+    hostname: ldap
+    command: ["--loglevel", "warning"]
+    environment:
+      LDAP_ORGANISATION: Charlie
+      LDAP_DOMAIN: charlie.local
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD:-charlie}
+      LDAP_TLS: "false"
+      LDAP_SEED_INTERNAL_LDIF_PATH: /seed/ldif
+    ports:
+      - "3890:389"
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+      - ./ldap:/seed/ldif:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=charlie,dc=local -D cn=admin,dc=charlie,dc=local -w $${LDAP_ADMIN_PASSWORD} -s base dn >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
   prometheus:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
@@ -172,6 +213,9 @@ services:
       - prometheus
 
 volumes:
+  postgres-data:
+  ldap-data:
+  ldap-config:
   keeper-1-data:
   keeper-2-data:
   keeper-3-data:

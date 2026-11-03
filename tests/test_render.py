@@ -74,7 +74,8 @@ def test_compose_is_valid_yaml_with_a_service_per_node(topo):
     assert expected <= set(compose["services"])
     for n in topo.nodes:
         assert set(compose["services"][n.name]["depends_on"]) == {k.name for k in topo.keeper_nodes}
-    assert set(compose["volumes"]) == {f"{name}-data" for name in expected}
+    stateful = {f"{name}-data" for name in expected} | {"postgres-data", "ldap-data", "ldap-config"}
+    assert set(compose["volumes"]) == stateful
 
 
 def test_no_secret_is_baked_into_the_rendered_files(topo):
@@ -97,3 +98,23 @@ def test_write_removes_files_of_nodes_that_left_the_topology(topo, tmp_path):
     assert not (tmp_path / "config/ch-s3-r2").exists()
     assert any("removed" in c for c in changed)
     assert render.drift(topo, tmp_path) == []
+
+
+def test_postgres_logins_go_to_the_directory_except_service_accounts(topo):
+    hba = render.render(topo)["postgres/02_hba.sh"]
+    assert "ldap ldapserver=ldap" in hba
+    assert f'ldapsuffix=",ou=people,{topo.ldap.base_dn}"' in hba
+    # the service-account rule must come before the catch-all LDAP rule, or it is never reached
+    assert hba.index("/^svc_.*") < hba.index("ldapserver=ldap")
+
+
+def test_ldap_acl_lets_signed_in_users_read_groups_only(topo):
+    ldif = render.render(topo)["ldap/10-acl.ldif"]
+    assert f'ou=groups,{topo.ldap.base_dn}" by users read by * none' in ldif
+
+
+def test_clickhouse_has_no_ldap_user_directory(topo):
+    # An LDAP *user directory* breaks Distributed queries: see the comment in cluster.xml.
+    xml = ET.fromstring(render.render(topo)["config/cluster.xml"])
+    assert xml.find("user_directories/ldap") is None
+    assert xml.find("ldap_servers/directory/host").text == "ldap"

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from . import ch, migrate, render, status
+from .access import cli as access_cli
 from .loadgen import LoadGenerator
 from .topology import load
 
@@ -121,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("verify", help="check totals, duplicates, replica equality, shard balance")
     v.add_argument("--expect", type=int, default=None, help="exact number of rows expected")
     v.set_defaults(fn=cmd_verify)
+
+    access_cli.register(sub)
+    access_cli.register_directory(sub)
 
     args = p.parse_args(argv)
     if args.cmd == "load" and args.batches is None and args.duration is None:

@@ -1,0 +1,7 @@
+# Generated from topology.yaml. Loaded once, when the directory is first created.
+# ClickHouse finds a person's groups with a search that runs as that person, so signed-in users
+# must be able to read the group branch (and nothing else beyond their own entry).
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcAccess
+olcAccess: {2}to dn.subtree="ou=groups,{{ t.ldap.base_dn }}" by users read by * none

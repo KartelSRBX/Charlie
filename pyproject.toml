@@ -14,6 +14,8 @@ dependencies = [
     "pyyaml>=6,<7",
     "jinja2>=3.1,<4",
     "clickhouse-connect>=0.8,<2",
+    "psycopg[binary]>=3.2,<4",
+    "ldap3>=2.9,<3",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +30,7 @@ packages = ["src/charlie"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -m 'not e2e'"
+filterwarnings = ["ignore:(tagMap|typeMap) is deprecated:DeprecationWarning"]
 markers = ["e2e: needs the running docker stack (make up)"]
 
 [tool.ruff]

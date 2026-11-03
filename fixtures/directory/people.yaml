@@ -1,0 +1,20 @@
+# Demo people for the LDAP server that stands in for an identity provider (authentik, Keycloak,
+# FreeIPA, Active Directory all look like this from the database's side). Passwords are demo-only.
+# In real life this file does not exist: the IdP owns people and group membership.
+people:
+  alice:
+    name: Alice Marsh
+    password: alice-pass
+    groups: [igaming_ro_aurora]       # analyst of one brand only
+  bob:
+    name: Bob Keller
+    password: bob-pass
+    groups: [igaming_ro, finance_ro]  # analyst across both domains
+  carol:
+    name: Carol Stone
+    password: carol-pass
+    groups: [igaming_admin]           # data engineer
+  dave:
+    name: Dave Holt
+    password: dave-pass
+    groups: [igaming_rw]
